@@ -22,7 +22,12 @@ Docs:
 
 - **Development** tests live in `tests.json` (see `references/development-setup.md`) or
   `projects.tests.create`; also set `usesValidationDataset` / `usesTrainingDataset` / `usesMlModel`.
-- **Monitoring** tests run on live traces; set `evaluationWindow` / `delayWindow` (hours).
+- **Monitoring** tests run on live traces; set `evaluationWindow` / `delayWindow` in **seconds**, as multiples of 3600 (e.g. `86400` = one day; max 30 days).
+
+For monitoring-test API payloads, set `usesProductionData: true` and explicitly provide the other
+applicable `uses*` booleans (`usesMlModel`, `usesReferenceDataset`, `usesTestResults`,
+`usesTrainingDataset`, `usesValidationDataset`) rather than relying on omitted values. Some create
+paths reject missing booleans instead of defaulting them.
 
 ### Reference columns by their canonical `openlayer_*` names
 
@@ -36,9 +41,14 @@ name makes the test silently **SKIPPED** ("column not in dataset"), which a "0 f
 
 - **`insightParameters` is never `null`.** The catalog prints `"insightParameters": null` for some tests,
   but the API rejects null ("Field may not be null"). When a test takes params, use an array of
-  `{name, value}`. When it takes none, **omit the key entirely** — for many subtypes (`hasPromptInjectionCount`,
-  `metricThreshold`, and the no-param drift/profile tests `labelDrift`/`driftedFeatureCount`/
+  `{name, value}`. When it takes none, **omit the key entirely** — for many subtypes (`metricThreshold`
+  and the no-param drift/profile tests `labelDrift`/`driftedFeatureCount`/
   `classImbalanceRatio`/`correlatedFeatureCount`) even `[]` is rejected ("Unknown field").
+- **Omitting `detector` on `hasPromptInjectionCount` keeps legacy Prompt Guard 2.** API, `tests.json`, and
+  programmatic creation with no `detector` resolve to frozen `prompt_guard_2` (English/jailbreak-tuned,
+  weak on multilingual input), unlike the UI default for new tests (`horizon_base` / `balanced`). Set
+  `detector` explicitly for a multilingual app. Do not pass `sensitivity` with `prompt_guard_2` or with
+  no `detector` — creation rejects it. https://docs.openlayer.com/tests/catalog/has-prompt-injection-count.md
 - **Catalog values can be wrong/stale — they fail at sync.** Seen: `columnDrift` `test_type` must be
   title-case **`"K-S Test"`** (catalog shows `"K-S test"`); `classImbalanceRatio` `operator` must be
   `<` or `<=` (catalog shows `>`). Cross-check the operator/enum the backend accepts, not just the catalog text.
@@ -56,6 +66,13 @@ name makes the test silently **SKIPPED** ("column not in dataset"), which a "0 f
   it. The backend rejects an unsupported subtype×task at sync.
 - **A single bad test fails the WHOLE push at sync** (Total Tests = 0) — you only get per-test status once
   sync passes. So fix sync-time rejections first, *then* read per-test pass/fail/skip.
+- **Monitoring evaluation is asynchronous and time-windowed.** Rows must have timestamps inside the
+  evaluation window. After creating a set of monitoring tests, evaluate the inference pipeline, poll
+  the returned background task, and verify each test has a result. Creating the tests alone does not
+  make result or failed-row workflows ready.
+- **Fixing a skipped test does not erase its old result.** Correct the definition and reevaluate with
+  overwrite when supported. If an obsolete definition or stale skipped result still wins default list
+  ordering, archive that test and create a clean replacement so users do not keep selecting it.
 
 ## Catalog at a glance
 
@@ -114,7 +131,11 @@ MCP is connected (covered in a separate skill).
 | ------- | ------- | --- |
 | Inventing a `subtype`/threshold shape | Won't sync or evaluate | Copy from the catalog page (`tests/catalog/<test>.md`) |
 | Targeting raw `output` instead of `openlayer_output` | Test silently SKIPPED | Use canonical `openlayer_*` column names |
+| Omitting monitoring `uses*` flags | Test creation can fail validation | Set `usesProductionData: true` and provide the remaining applicable booleans explicitly |
 | Trusting "0 failing" totals | A skipped test isn't failing | Check per-test status after a push |
+| Creating monitoring tests without running evaluation | Result and failed-row queries return nothing | Evaluate the pipeline, poll completion, and verify every active test result |
+| Streaming rows outside the evaluation window | Test is empty or skipped | Use valid recent timestamps and confirm data-source health before evaluation |
+| Leaving a corrected test's obsolete copy active | Default lists can surface stale skipped results | Archive the obsolete test after the corrected result is verified |
 | Wrong `type` for the metric | Misclassified test | Match `performance`/`integrity`/`consistency` to the catalog entry |
 | SQL test not selecting from `df` / returning many values | Test errors | Query `FROM df`, return one number |
 | Rubric test missing `criteria_list` params | Judge can't run | Provide the criteria per the catalog page |
